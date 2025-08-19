@@ -10,3 +10,4 @@ wheels/
 .venv
 .env
 project.txt
+MCP_SERVER_CHROME
