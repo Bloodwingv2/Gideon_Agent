@@ -12,7 +12,6 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 
-# Initialize MCP Client
 client = MultiServerMCPClient(
     {
         "Chrome-MCP-Server": {
@@ -22,32 +21,26 @@ client = MultiServerMCPClient(
     }
 )
 
-# Define Agent State Class for Gideon Agent
+# Move these inside an async function since get_tools() is async
+async def setup_agent():
+    mcp_tools = await client.get_tools() 
+    Ollama_model = init_chat_model("ollama:llama3.2:latest", streaming = True)  # Initialize our Ollama model
+    ollama_mcp = Ollama_model.bind_tools(tools=mcp_tools)  # Bind MCP tools to our Model
+    return ollama_mcp, mcp_tools
+
+# Define Agent State Class for Gideon Agent, although we are currently only gonna use 1 string
 class Gideon(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages()]
 
-async def initialize_agent():
-    """Initialize the agent with MCP tools and model"""
-    mcp_tools = await client.get_tools()  # Retrieve MCP Tools
-    ollama_model = init_chat_model("ollama:llama3.2:latest")  # Initialize our Ollama model
-    ollama_mcp = ollama_model.bind_tools(tools=mcp_tools)  # Bind MCP tools to our Model
-    return ollama_mcp, mcp_tools
-
-async def model_call(state: Gideon, model) -> Gideon:
-    """Process the messages and get model response"""
-    system_message = SystemMessage(
-        content="Your Name is Gideon, You were made by Mirang Bhandari, you have access to various MCP tools via Chrome MCP server which can open webpages, Take screenshots, Add Bookmarks, delete Bookmarks and a lot more, use these tools when necessary otherwise answer the question"
-    )
+async def model_call(state: Gideon) -> Gideon:
+    """Append the System Message and User message to the state"""
+    System_message = SystemMessage(content="Your Name is Gideon, You were made by Mirang Bhandari, you have access to various MCP tools via Chrome MCP server which can open webpages, Take screenshots, Add Bookmarks, delete Bookmarks and a lot more, use these tools when necessary otherwise answer the question")
+    messages = [System_message] + state["messages"]
     
-    # Add system message only if it's not already present
-    messages = state["messages"]
-    if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [system_message] + messages
+    # Actually call the model to get a response via thread method
+    response = await ollama_mcp.ainvoke(messages)
     
-    # Get response from the model
-    response = await model.ainvoke(messages)
-    
-    return {"messages": [response]}
+    return {"messages": [response]}  # Return the response message and store it in the state
 
 # Define a Schema where the flow should continue and execute remaining tool calls or end
 def should_continue(state: Gideon):
@@ -59,16 +52,16 @@ def should_continue(state: Gideon):
     else:
         return "END"
 
-async def create_graph(model, mcp_tools):
-    """Create and compile the graph"""
+# Start Main Function code
+async def main():
+    global ollama_mcp, mcp_tools
+    
+    # Setup the agent first
+    ollama_mcp, mcp_tools = await setup_agent()
+    
     # Define the graph flow and conditional edges
     graph = StateGraph(Gideon)
-    
-    # Create a wrapper function for model_call that includes the model
-    async def model_call_wrapper(state: Gideon) -> Gideon:
-        return await model_call(state, model)
-    
-    graph.add_node("Gideon", model_call_wrapper)
+    graph.add_node("Gideon", model_call)
     tool_node = ToolNode(tools=mcp_tools)
     graph.add_node("Tools", tool_node)
 
@@ -83,46 +76,27 @@ async def create_graph(model, mcp_tools):
     )
     graph.add_edge("Tools", "Gideon")
 
-    return graph.compile()
+    app = graph.compile()
+    
+    # Main User Loop Begins
+    prompt = ""
+    print("Hello! my name is Gideon!, How may i assist you today?")
+    while "exit" not in prompt.lower():
+        prompt = input("User: ")
+        if "exit" in prompt.lower():  # Check exit before processing
+            break
+            
+        input_state = {"messages": [HumanMessage(content=prompt)]}  # Use actual prompt
+        
+        events = app.astream_events(input=input_state, version="v2")
+        print("Gideon: ", end="", flush=True)
+        async for event in events:
+            if event['event'] == "on_chat_model_stream":
+                print(event["data"]["chunk"].content, end="",flush = True)
+        print("\n")
 
-# Start Main Function code
-async def main():
-    try:
-        # Initialize the agent
-        model, mcp_tools = await initialize_agent()
-        app = await create_graph(model, mcp_tools)
-        
-        print("Hello! my name is Gideon! How may I assist you today?")
-        
-        prompt = ""
-        while "exit" not in prompt.lower():
-            prompt = input("You: ")
-            
-            if "exit" in prompt.lower():
-                break
-            
-            # Use the actual user input instead of hardcoded message
-            input_state = {"messages": [HumanMessage(content=prompt)]}
-            
-            try:
-                result = await app.ainvoke(input_state)
-                
-                # Print the final response
-                messages = result["messages"]
-                for message in messages:
-                    if isinstance(message, tuple):
-                        print(message)
-                    else:
-                        message.pretty_print()
-                        
-            except Exception as e:
-                print(f"Error processing request: {e}")
-        
-        print("Exiting System.... Have a Great day!")
-        
-    except Exception as e:
-        print(f"Error initializing agent: {e}")
+    print("Exiting System.... Have a Great day!")
 
 # Run the main function
-if __name__ == "__main__":
+if __name__ =="__main__":
     asyncio.run(main())
