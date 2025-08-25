@@ -24,7 +24,7 @@ client = MultiServerMCPClient(
 # Move these inside an async function since get_tools() is async
 async def setup_agent():
     mcp_tools = await client.get_tools() 
-    Ollama_model = init_chat_model("ollama:llama3.2:latest", streaming = True)  # Initialize our Ollama model
+    Ollama_model = init_chat_model("ollama:llama3.2:3b-instruct-fp16", streaming = True)  # Initialize our Ollama model
     ollama_mcp = Ollama_model.bind_tools(tools=mcp_tools)  # Bind MCP tools to our Model
     return ollama_mcp, mcp_tools
 
@@ -34,7 +34,25 @@ class Gideon(TypedDict):
 
 async def model_call(state: Gideon) -> Gideon:
     """Append the System Message and User message to the state"""
-    System_message = SystemMessage(content="Your Name is Gideon, You were made by Mirang Bhandari, you have access to various MCP tools via Chrome MCP server which can open webpages, Take screenshots, Add Bookmarks, delete Bookmarks and a lot more, use these tools when necessary otherwise answer the question")
+    System_message = SystemMessage(
+        content="""You are Gideon, an AI assistant created by Mirang Bhandari. You can chat naturally with users and answer questions. 
+
+        You also have access to various MCP tools via the Chrome MCP server, which allow you to:
+        - Open webpages
+        - Take screenshots
+        - Add bookmarks
+        - Delete bookmarks
+        - And other browser-related actions
+
+        Rules:
+        1. Only use MCP tools when the user explicitly requests an action or when the question clearly requires it. 
+        2. Do not use tools for casual conversation, greetings, or general chit-chat. 
+        3. For casual questions or small talk (e.g., "how are you?", "what's up?"), respond naturally in human-friendly text without invoking any tools. 
+        4. If a tool is used, summarize the output in plain language for the user instead of dumping raw JSON or technical data. 
+        5. Always maintain a polite and helpful tone.
+
+        Your goal: assist the user effectively, but do not perform unnecessary actions.""")
+    
     messages = [System_message] + state["messages"]
     
     # Actually call the model to get a response via thread method
@@ -95,6 +113,7 @@ async def main():
                 print(event["data"]["chunk"].content, end="",flush = True)
         print("\n")
 
+    print("\n")
     print("Exiting System.... Have a Great day!")
 
 # Run the main function
